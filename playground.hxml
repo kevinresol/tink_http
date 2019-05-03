@@ -1,7 +1,10 @@
 -cp tests
--js bin/playground.js
+-cpp bin/playground
 -main Playground
 
--lib hxnodejs
+# -lib hxnodejs
 -lib travix
 -lib tink_http
+-lib tink_tcp
+-lib tink_uv
+-lib linc_uv
