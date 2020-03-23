@@ -69,6 +69,10 @@ class AwsLambdaNodeContainer implements Container {
         js.Node.exports,
         name,
         function(event:LambdaEvent, context:Dynamic, callback:JsError->LambdaResponse->Void) {
+          untyped console.log('event');
+          untyped console.log(event);
+          untyped console.log('context');
+          untyped console.log(context);
           context.callbackWaitsForEmptyEventLoop = false;
           handler.process(getRequest(event)).handle(function(res) {
             var binary = isBinary(res.header);
