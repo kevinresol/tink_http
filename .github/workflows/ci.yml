@@ -16,42 +16,13 @@ jobs:
         haxe-version:
           - stable
           - nightly
-        combination:
-          - containers: node
-            targets: js,node,php
-          - containers: node
-            targets: neko
-          - containers: node
-            targets: cpp
-          - containers: node
-            targets: python
-          - containers: node
-            targets: interp
-          - containers: node
-            targets: jvm
-          - containers: node-tcp
-            targets: node
-        exclude:
-          - haxe-version: nightly
-            combination:
-              containers: node
-              targets: neko
-          - haxe-version: nightly
-            combination:
-              containers: node
-              targets: cpp
+        # M7 temporary single cell — M8 expands full client + unit matrix
+        target:
+          - node
 
     steps:
       - name: Check out repo
         uses: actions/checkout@v6
-
-      # Needed for the jvm matrix target (and keytool CA import below); not always present on ubuntu-latest
-      - name: Install JDK
-        if: contains(matrix.combination.targets, 'jvm')
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
 
       - name: Cache Haxe
         uses: actions/cache@v6
@@ -104,7 +75,7 @@ jobs:
           echo "HTTPBIN_URL=http://${HTTPBIN_HOST}:${HTTP_PORT}" >> "$GITHUB_ENV"
           echo "HTTPBIN_SECURE_URL=https://${HTTPBIN_HOST}:${HTTPS_PORT}" >> "$GITHUB_ENV"
 
-          # JVM trust store (does not use OS CAs)
+          # JVM trust store (does not use OS CAs) — used again when M8 adds jvm cells
           if command -v keytool >/dev/null 2>&1; then
             KEYTOOL="$(command -v keytool)"
             if JAVA_BIN="$(readlink -f "$KEYTOOL" 2>/dev/null)"; then
@@ -157,9 +128,11 @@ jobs:
 
       - name: Run Test
         run: >
-          haxe master.hxml
-          -D containers=${{ matrix.combination.containers }}
-          -D targets=${{ matrix.combination.targets }}
+          lix run travix ${{ matrix.target }}
+          -D suites=client,unit
+          -D clients=node
+          -D endpoints=httpbin,httpbin-secure
+          -D cases=all
           -D httpbin_url=${{ env.HTTPBIN_URL }}
           -D httpbin_secure_url=${{ env.HTTPBIN_SECURE_URL }}
           -D httpbin_ca=${{ env.HTTPBIN_CA }}
