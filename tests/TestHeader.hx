@@ -11,22 +11,36 @@ import tink.Url;
 using tink.io.Source;
 using tink.CoreApi;
 
-@:asserts
+/**
+  Shared helpers for header unit suites. Public test methods live on case subclasses
+  so SuiteAsm can register exactly the groups selected by `-D cases=`.
+**/
 class TestHeader {
 	public function new() {}
 
+	static public var credentials(default, null) = 'usr:pwd';
+	static public var auth(default, null) = HeaderValue.basicAuth(credentials.split(':')[0], credentials.split(':')[1]);
+
+	function createAuthHeader(v)
+		return new IncomingRequestHeader(GET, '/', [new HeaderField(AUTHORIZATION, v)]);
+
+	function createContentLengthHeader(v)
+		return new Header([new HeaderField(CONTENT_LENGTH, v)]);
+}
+
+/** Case id: `header-build`. */
+@:asserts
+class TestHeaderBuild extends TestHeader {
 	#if (cpp && (haxe_ver >= 4))
 		// https://github.com/HaxeFoundation/haxe/issues/7536
 	#else
-	static public var credentials(default, null) = 'usr:pwd';
-	static public var auth(default, null) = HeaderValue.basicAuth(credentials.split(':')[0], credentials.split(':')[1]);
 	@:describe('Build Outgoing Request Header')
 	@:variant(GET, 'https://www.example.com', HTTP1_1, [], 'GET / HTTP/1.1\r\n\r\n')
 	@:variant(GET, 'https://www.example.com', HTTP2, [new tink.http.Header.HeaderField('host', 'v')], 'GET / HTTP/2\r\nhost: v\r\n\r\n')
 	@:variant(GET, 'https://${TestHeader.credentials}@www.example.com', HTTP2, [], 'GET / HTTP/2\r\nauthorization: ${TestHeader.auth}\r\n\r\n')
 	@:variant(GET, 'https://www.example.com', HTTP2, [new tink.http.Header.HeaderField(AUTHORIZATION, TestHeader.auth)], 'GET / HTTP/2\r\nauthorization: ${TestHeader.auth}\r\n\r\n')
 	public function buildOutgoingRequestHeader(method:Method, url:Url, version:Protocol, fields:Array<HeaderField>, str:String) {
-		var header = new OutgoingRequestHeader(method, url, version, fields);
+		final header = new OutgoingRequestHeader(method, url, version, fields);
 		return assert(header.toString() == str);
 	}
 	#end
@@ -34,19 +48,97 @@ class TestHeader {
 	@:variant(200, 'OK', HTTP1_1, [], 'HTTP/1.1 200 OK\r\n\r\n')
 	@:variant(403, 'Forbidden', HTTP2, [new tink.http.Header.HeaderField('content-length', '0')], 'HTTP/2 403 Forbidden\r\ncontent-length: 0\r\n\r\n')
 	public function buildResponseHeader(code:Int, reason:String, version:Protocol, fields:Array<HeaderField>, str:String) {
-		var header = new ResponseHeader(code, reason, fields, version);
+		final header = new ResponseHeader(code, reason, fields, version);
 		return assert(header.toString() == str);
 	}
 
+	@:variant(new tink.http.Header([]), tink.http.Header)
+	@:variant(new tink.http.Request.RequestHeader(GET, '', []), tink.http.Request.RequestHeader)
+	@:variant(new tink.http.Request.IncomingRequestHeader(GET, '', []), tink.http.Request.IncomingRequestHeader)
+	@:variant(new tink.http.Request.OutgoingRequestHeader(GET, '', []), tink.http.Request.OutgoingRequestHeader)
+	@:variant(new tink.http.Response.ResponseHeader(200, 'OK', []), tink.http.Response.ResponseHeaderBase)
+	public function concat(header:Header, cls:Class<Header>) {
+		final header = header.concat([new HeaderField('host', 'haxetink.org')]);
+		asserts.assert(Std.isOfType(header, cls));
+		asserts.assert(Lambda.count(header) == 1);
+		return asserts.done();
+	}
+}
+
+/** Case id: `header-auth`. */
+@:asserts
+class TestHeaderAuth extends TestHeader {
+	@:variant('Basic aGF4ZTp0aW5r', Basic('haxe', 'tink'))
+	@:variant('Bearer my_token', Bearer('my_token'))
+	@:variant('Haxe haxe_token', Others('Haxe', 'haxe_token'))
+	public function getAuth(auth:String, expected:Authorization)
+		return assert(Type.enumEq(createAuthHeader(auth).getAuth(), Success(expected)));
+
+	@:variant('Basic abc')
+	@:variant('Basic')
+	public function getAuthError(auth:String)
+		return assert(!createAuthHeader(auth).getAuth().isSuccess());
+
+	@:variant('foo', 'bar', 'Basic Zm9vOmJhcg==')
+	public function basicAuth(username:String, password:String, output:String)
+		return assert(HeaderValue.basicAuth(username, password) == output);
+}
+
+/** Case id: `header-content-length`. */
+@:asserts
+class TestHeaderContentLength extends TestHeader {
+	@:variant('1', 1)
+	@:variant('2', 2)
+	public function getContentLength(v:String, expected:Int)
+		return assert(Type.enumEq(createContentLengthHeader(v).getContentLength(), Success(expected)));
+
+	@:variant('v')
+	public function getContentLengthError(v:String)
+		return assert(!createContentLengthHeader(v).getContentLength().isSuccess());
+
+	public function getMissingContentLength()
+		return assert(new Header().getContentLength().match(Failure(_)));
+}
+
+/** Case id: `header-accepts`. */
+@:asserts
+class TestHeaderAccepts extends TestHeader {
+	@:variant('text/plain, text/html', 'text/plain', true)
+	@:variant('text/plain, text/html', 'text/html', true)
+	@:variant('text/*, application/json', 'text/html', true)
+	@:variant('*/*, application/json', 'text/html', true)
+	@:variant('application/json, text/*', 'text/html', true)
+	@:variant('application/json, */*', 'text/html', true)
+	@:variant('text/x-dvi; q=.8; mxb=100000; mxt=5.0, text/x-c', 'text/plain', false)
+	@:variant('text/*', 'application/json', false)
+	public function accepts(header:String, type:String, accepted:Bool)
+		return assert(new Header([new HeaderField(ACCEPT, header)]).accepts(type).sure() == accepted);
+}
+
+/** Case id: `header-dates`. */
+@:asserts
+class TestHeaderDates extends TestHeader {
+	// noon avoids the weekday shifting across timezones
+	@:variant(new Date(2009, 10, 25, 12, 0, 0), 'Wed, 25 Nov 2009')
+	public function ofDate(date:Date, expected:String)
+		return assert((HeaderValue.ofDate(date):String).substr(0, expected.length) == expected);
+}
+
+/**
+  Case id: `request-parse`.
+  Excluded legacy parseIncoming* methods stay @:exclude (no case mapping until re-enabled).
+**/
+@:asserts
+class TestHeaderRequestParse extends TestHeader {
 	@:exclude
 	@:describe('Parse Incoming Request Header')
 	public function parseIncomingRequestHeader() {
-		var req:IdealSource = 'GET /path HTTP/1.1\r\nHost: www.example.com\r\nUser-Agent: Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.5) Gecko/20091102 Firefox/3.5.5 (.NET CLR 3.5.30729)\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nAccept-Language: en-us,en;q=0.5\r\nAccept-Encoding: gzip,deflate\r\nAccept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7\r\nKeep-Alive: 300\r\nConnection: keep-alive\r\nCookie: PHPSESSID=r2t5uvjq435r4q7ib3vtdjq120\r\nPragma: no-cache\r\nCache-Control: no-cache\r\n\r\nabc';
+		final req:IdealSource = 'GET /path HTTP/1.1\r\nHost: www.example.com\r\nUser-Agent: Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.5) Gecko/20091102 Firefox/3.5.5 (.NET CLR 3.5.30729)\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nAccept-Language: en-us,en;q=0.5\r\nAccept-Encoding: gzip,deflate\r\nAccept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7\r\nKeep-Alive: 300\r\nConnection: keep-alive\r\nCookie: PHPSESSID=r2t5uvjq435r4q7ib3vtdjq120\r\nPragma: no-cache\r\nCache-Control: no-cache\r\n\r\nabc';
 
 		return req.parse(IncomingRequestHeader.parser())
 			.next(function(o) {
-				var header = o.a;
-				var body = o.b;
+				final header = o.a;
+				final body = o.b;
 				asserts.assert(header.method == GET);
 				asserts.assert(header.url.toString() == '/path');
 				asserts.assert(header.protocol == 'HTTP/1.1');
@@ -79,12 +171,12 @@ class TestHeader {
 	@:exclude
 	@:describe('Parse Incoming Response Header')
 	public function parseIncomingResponseHeader() {
-		var req:IdealSource = 'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nDate: Sat, 28 Nov 2009 04:36:25 GMT\r\nServer: LiteSpeed\r\nConnection: close\r\nX-Powered-By: W3 Total Cache/0.8\r\nPragma: public\r\nExpires: Sat, 28 Nov 2009 05:36:25 GMT\r\nEtag: "pub1259380237;gz"\r\nCache-Control: max-age=3600, public\r\nContent-Type: text/html; charset=UTF-8\r\nLast-Modified: Sat, 28 Nov 2009 03:50:37 GMT\r\nX-Pingback: http://net.tutsplus.com/xmlrpc.php\r\nContent-Encoding: gzip\r\nVary: Accept-Encoding, Cookie, User-Agent\r\n\r\nabc';
+		final req:IdealSource = 'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nDate: Sat, 28 Nov 2009 04:36:25 GMT\r\nServer: LiteSpeed\r\nConnection: close\r\nX-Powered-By: W3 Total Cache/0.8\r\nPragma: public\r\nExpires: Sat, 28 Nov 2009 05:36:25 GMT\r\nEtag: "pub1259380237;gz"\r\nCache-Control: max-age=3600, public\r\nContent-Type: text/html; charset=UTF-8\r\nLast-Modified: Sat, 28 Nov 2009 03:50:37 GMT\r\nX-Pingback: http://net.tutsplus.com/xmlrpc.php\r\nContent-Encoding: gzip\r\nVary: Accept-Encoding, Cookie, User-Agent\r\n\r\nabc';
 
 		return req.parse(ResponseHeader.parser())
 			.next(function(o) {
-				var header = o.a;
-				var body = o.b;
+				final header = o.a;
+				final body = o.b;
 				asserts.assert(header.protocol == HTTP1_1);
 				asserts.assert(header.statusCode == StatusCode.OK);
 				asserts.assert(header.reason == StatusCode.OK);
@@ -119,71 +211,10 @@ class TestHeader {
 			});
 	}
 
-	@:variant(new tink.http.Header([]), tink.http.Header)
-	@:variant(new tink.http.Request.RequestHeader(GET, '', []), tink.http.Request.RequestHeader)
-	@:variant(new tink.http.Request.IncomingRequestHeader(GET, '', []), tink.http.Request.IncomingRequestHeader)
-	@:variant(new tink.http.Request.OutgoingRequestHeader(GET, '', []), tink.http.Request.OutgoingRequestHeader)
-	@:variant(new tink.http.Response.ResponseHeader(200, 'OK', []), tink.http.Response.ResponseHeaderBase)
-	public function concat(header:Header, cls:Class<Header>) {
-		var header = header.concat([new HeaderField('host', 'haxetink.org')]);
-		asserts.assert(Std.isOfType(header, cls));
-		asserts.assert(Lambda.count(header) == 1);
-		return asserts.done();
-	}
-
-	function createAuthHeader(v)
-		return new IncomingRequestHeader(GET, '/', [new HeaderField(AUTHORIZATION, v)]);
-
-	@:variant('Basic aGF4ZTp0aW5r', Basic('haxe', 'tink'))
-	@:variant('Bearer my_token', Bearer('my_token'))
-	@:variant('Haxe haxe_token', Others('Haxe', 'haxe_token'))
-	public function getAuth(auth:String, expected:Authorization)
-		return assert(Type.enumEq(createAuthHeader(auth).getAuth(), Success(expected)));
-
-	@:variant('Basic abc')
-	@:variant('Basic')
-	public function getAuthError(auth:String)
-		return assert(!createAuthHeader(auth).getAuth().isSuccess());
-
-	function createContentLengthHeader(v)
-		return new Header([new HeaderField(CONTENT_LENGTH, v)]);
-
-	@:variant('1', 1)
-	@:variant('2', 2)
-	public function getContentLength(v:String, expected:Int)
-		return assert(Type.enumEq(createContentLengthHeader(v).getContentLength(), Success(expected)));
-
-	@:variant('v')
-	public function getContentLengthError(v:String)
-		return assert(!createContentLengthHeader(v).getContentLength().isSuccess());
-
-	public function getMissingContentLength()
-		return assert(new Header().getContentLength().match(Failure(_)));
-
-	@:variant('text/plain, text/html', 'text/plain', true)
-	@:variant('text/plain, text/html', 'text/html', true)
-	@:variant('text/*, application/json', 'text/html', true)
-	@:variant('*/*, application/json', 'text/html', true)
-	@:variant('application/json, text/*', 'text/html', true)
-	@:variant('application/json, */*', 'text/html', true)
-	@:variant('text/x-dvi; q=.8; mxb=100000; mxt=5.0, text/x-c', 'text/plain', false)
-	@:variant('text/*', 'application/json', false)
-	public function accepts(header:String, type:String, accepted:Bool)
-		return assert(new Header([new HeaderField(ACCEPT, header)]).accepts(type).sure() == accepted);
-
-	@:variant('foo', 'bar', 'Basic Zm9vOmJhcg==')
-	public function basicAuth(username:String, password:String, output:String)
-		return assert(HeaderValue.basicAuth(username, password) == output);
-
-	// noon avoids the weekday shifting across timezones
-	@:variant(new Date(2009, 10, 25, 12, 0, 0), 'Wed, 25 Nov 2009')
-	public function ofDate(date:Date, expected:String)
-		return assert((HeaderValue.ofDate(date):String).substr(0, expected.length) == expected);
-
 	// a chunked Transfer-Encoding must be used even when Content-Length is present (RFC 7230 §3.3.3),
 	// and the token match must be case-insensitive
 	public function parseBodyPrefersTransferEncoding() {
-		var raw:IdealSource = 'POST / HTTP/1.1\r\nHost: example.com\r\nContent-Length: 999\r\nTransfer-Encoding: Chunked\r\n\r\n3\r\n123\r\n0\r\n\r\n';
+		final raw:IdealSource = 'POST / HTTP/1.1\r\nHost: example.com\r\nContent-Length: 999\r\nTransfer-Encoding: Chunked\r\n\r\n3\r\n123\r\n0\r\n\r\n';
 		IncomingRequest.parse('127.0.0.1', raw)
 			.next(function(req) return switch req.body {
 				case Plain(source): source.all();
@@ -196,7 +227,7 @@ class TestHeader {
 
 	// HEAD requests typically carry no body, so a missing Content-Length must not fail with 411
 	public function parseHeadRequestHasNoBody() {
-		var raw:IdealSource = 'HEAD / HTTP/1.1\r\nHost: example.com\r\n\r\n';
+		final raw:IdealSource = 'HEAD / HTTP/1.1\r\nHost: example.com\r\n\r\n';
 		IncomingRequest.parse('127.0.0.1', raw)
 			.next(function(req) return switch req.body {
 				case Plain(source): source.all();
@@ -209,7 +240,7 @@ class TestHeader {
 
 	// RFC 9112 §6.3: without Content-Length or chunked TE, body length is zero for all methods
 	public function parsePostWithoutFramingHasEmptyBody() {
-		var raw:IdealSource = 'POST / HTTP/1.1\r\nHost: example.com\r\n\r\n';
+		final raw:IdealSource = 'POST / HTTP/1.1\r\nHost: example.com\r\n\r\n';
 		IncomingRequest.parse('127.0.0.1', raw)
 			.next(function(req) return switch req.body {
 				case Plain(source): source.all();
@@ -222,7 +253,7 @@ class TestHeader {
 
 	// RFC 9112 §3.2.2: HTTP/1.1 requests without a Host header must be rejected
 	public function parseHttp11MissingHost() {
-		var raw:IdealSource = 'GET / HTTP/1.1\r\n\r\n';
+		final raw:IdealSource = 'GET / HTTP/1.1\r\n\r\n';
 		IncomingRequest.parse('127.0.0.1', raw)
 			.handle(function(o) switch o {
 				case Success(_):
@@ -236,7 +267,7 @@ class TestHeader {
 	}
 
 	public function parseHttp11WithHost() {
-		var raw:IdealSource = 'GET / HTTP/1.1\r\nHost: example.com\r\n\r\n';
+		final raw:IdealSource = 'GET / HTTP/1.1\r\nHost: example.com\r\n\r\n';
 		IncomingRequest.parse('127.0.0.1', raw)
 			.next(function(req) {
 				asserts.assert(req.header.byName(HOST).sure() == 'example.com');
@@ -248,7 +279,7 @@ class TestHeader {
 
 	// HTTP/1.0 does not require Host
 	public function parseHttp10MissingHost() {
-		var raw:IdealSource = 'GET / HTTP/1.0\r\n\r\n';
+		final raw:IdealSource = 'GET / HTTP/1.0\r\n\r\n';
 		IncomingRequest.parse('127.0.0.1', raw)
 			.next(function(req) {
 				asserts.assert(req.header.protocol == HTTP1_0);
@@ -264,7 +295,7 @@ class TestHeader {
 	@:variant(HEAD)
 	@:variant(OPTIONS)
 	public function parseChunkedTransferEncodingBeforeMethod(method:Method) {
-		var raw:IdealSource = '$method / HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n3\r\n123\r\n0\r\n\r\n';
+		final raw:IdealSource = '$method / HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n3\r\n123\r\n0\r\n\r\n';
 		IncomingRequest.parse('127.0.0.1', raw)
 			.next(function(req) return switch req.body {
 				case Plain(source): source.all();

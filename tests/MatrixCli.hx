@@ -62,6 +62,11 @@ class MatrixCli {
       '  client     - endpoints: httpbin and/or httpbin-secure (not local)',
       '  container  - endpoints: local only; requires port; clients=node',
       '',
+      'cases= for unit: required for client/container; for unit-only, omitted',
+      '  defaults to all (= D1 unit catalog: header-build, header-auth,',
+      '  header-content-length, header-accepts, header-dates, request-parse,',
+      '  chunked-codec, chunked-outgoing, response-framing, sse-codec).',
+      '',
       'Reserved (not implemented): suites=smoke; clients=std, local-container',
     ].join('\n');
   }
@@ -257,8 +262,8 @@ class MatrixCli {
 
   static function parseCases(raw:Null<String>, required:Bool):Outcome<MatrixCases, Error> {
     if (!required) {
+      // Unit-only: omitted `-D cases=` defaults to All (= full D1 unit catalog).
       if (raw == null || StringTools.trim(raw) == '') return Success(All);
-      // Optional for unit-only until M5 documents defaults; validate if present.
     } else if (raw == null || StringTools.trim(raw) == '') {
       return Failure(missing('cases'));
     }

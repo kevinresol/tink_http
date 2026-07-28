@@ -5,11 +5,23 @@ import MatrixCli.MatrixClient;
 import MatrixCli.MatrixConfig;
 import MatrixCli.MatrixEndpoint;
 import MatrixCli.MatrixSuite;
+import TestChunked.TestChunkedCodec;
+import TestChunked.TestChunkedOutgoing;
+import TestHeader.TestHeaderAccepts;
+import TestHeader.TestHeaderAuth;
+import TestHeader.TestHeaderBuild;
+import TestHeader.TestHeaderContentLength;
+import TestHeader.TestHeaderDates;
+import TestHeader.TestHeaderRequestParse;
 import TestHttp.Target;
 import TestHttp.TestHttpChunked;
 import TestHttp.TestHttpHeaders;
 import TestHttp.TestHttpMethods;
 import TestHttp.TestHttpOrigin;
+import FetchTest.FetchTestChunked;
+import FetchTest.FetchTestHeaders;
+import FetchTest.FetchTestMethods;
+import FetchTest.FetchTestRedirect;
 import tink.core.Error;
 import tink.core.Outcome;
 import tink.testrunner.Batch;
@@ -18,8 +30,8 @@ import tink.unit.TestSuite;
 
 /**
   Assembles tink_unittest suites from a parsed `MatrixConfig`.
-  TestHttp is gated by `-D cases=` via case-specific classes (suite assembly).
-  FetchTest remains wholesale until M5.
+  TestHttp / FetchTest / unit classes are gated by `-D cases=` (and endpoints for Fetch)
+  via case-specific classes (suite assembly — not “ran but skipped”).
 **/
 class SuiteAsm {
   public static function build(config:MatrixConfig):Outcome<Batch, Error> {
@@ -29,7 +41,7 @@ class SuiteAsm {
     final wantsContainer = config.suites.indexOf(Container) != -1;
 
     if (wantsUnit)
-      appendUnit(suites);
+      appendUnit(suites, config.cases);
 
     if (wantsClient || wantsContainer) {
       switch resolveClients(config.clients) {
@@ -45,11 +57,31 @@ class SuiteAsm {
     return Success(new Batch(suites));
   }
 
-  static function appendUnit(suites:Array<Suite>):Void {
-    suites.push(TestSuite.make(new TestHeader()));
-    suites.push(TestSuite.make(new Sses()));
-    suites.push(TestSuite.make(new TestChunked()));
-    suites.push(TestSuite.make(new TestResponseFraming()));
+  /**
+    Unit case catalog (D1). Omitted `-D cases=` for unit-only defaults to `all`
+    (= this full set) via MatrixCli.
+  **/
+  static function appendUnit(suites:Array<Suite>, cases:MatrixCases):Void {
+    if (wantsCase(cases, 'header-build'))
+      suites.push(TestSuite.make(new TestHeaderBuild()));
+    if (wantsCase(cases, 'header-auth'))
+      suites.push(TestSuite.make(new TestHeaderAuth()));
+    if (wantsCase(cases, 'header-content-length'))
+      suites.push(TestSuite.make(new TestHeaderContentLength()));
+    if (wantsCase(cases, 'header-accepts'))
+      suites.push(TestSuite.make(new TestHeaderAccepts()));
+    if (wantsCase(cases, 'header-dates'))
+      suites.push(TestSuite.make(new TestHeaderDates()));
+    if (wantsCase(cases, 'request-parse'))
+      suites.push(TestSuite.make(new TestHeaderRequestParse()));
+    if (wantsCase(cases, 'chunked-codec'))
+      suites.push(TestSuite.make(new TestChunkedCodec()));
+    if (wantsCase(cases, 'chunked-outgoing'))
+      suites.push(TestSuite.make(new TestChunkedOutgoing()));
+    if (wantsCase(cases, 'response-framing'))
+      suites.push(TestSuite.make(new TestResponseFraming()));
+    if (wantsCase(cases, 'sse-codec'))
+      suites.push(TestSuite.make(new Sses()));
   }
 
   static function appendClientLane(
@@ -69,8 +101,45 @@ class SuiteAsm {
           // Client lane never adds Local/DummyServer endpoints.
       }
     }
-    // Wholesale until M5 gates FetchTest by cases/endpoints.
-    suites.push(TestSuite.make(new FetchTest(#if php tink.http.ClientType.Php #end)));
+    appendFetch(suites, endpoints, cases);
+  }
+
+  /** FetchTest is client-lane only; plain vs secure gated by endpoints. */
+  static function appendFetch(
+    suites:Array<Suite>,
+    endpoints:Array<MatrixEndpoint>,
+    cases:MatrixCases
+  ):Void {
+    final fetchClient = #if php tink.http.Fetch.ClientType.Php #else null #end;
+    if (endpoints.indexOf(Httpbin) != -1)
+      appendFetchForUrl(suites, fetchClient, HttpbinConfig.url, 'httpbin', cases);
+    if (endpoints.indexOf(HttpbinSecure) != -1) {
+      // True capability skip: Fetch HTTPS broken / untrusted on these targets.
+      #if (!python && !cs && !interp && !lua)
+      appendFetchForUrl(suites, fetchClient, HttpbinConfig.secureUrl, 'httpbin-secure', cases);
+      #end
+    }
+  }
+
+  static function appendFetchForUrl(
+    suites:Array<Suite>,
+    fetchClient:Null<tink.http.Fetch.ClientType>,
+    baseUrl:String,
+    endpoint:String,
+    cases:MatrixCases
+  ):Void {
+    final name = 'Fetch -> $endpoint';
+    if (wantsAny(cases, ['methods', 'body']))
+      suites.push(TestSuite.make(new FetchTestMethods(fetchClient, baseUrl), name));
+    if (wantsCase(cases, 'headers'))
+      suites.push(TestSuite.make(new FetchTestHeaders(fetchClient, baseUrl), name));
+    if (wantsCase(cases, 'chunked-response'))
+      suites.push(TestSuite.make(new FetchTestChunked(fetchClient, baseUrl), name));
+    if (wantsCase(cases, 'redirect')) {
+      #if !cpp // TODO: investigate — true capability skip
+      suites.push(TestSuite.make(new FetchTestRedirect(fetchClient, baseUrl), name));
+      #end
+    }
   }
 
   static function appendContainerLane(

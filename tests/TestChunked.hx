@@ -8,12 +8,19 @@ import tink.Chunk;
 using tink.io.Source;
 using tink.CoreApi;
 
-@:asserts
+/**
+  Shared fixture for chunked unit suites. Public test methods live on case subclasses
+  so SuiteAsm can register exactly the groups selected by `-D cases=`.
+**/
 class TestChunked {
   final source:IdealSource = '123';
 
   public function new() {}
+}
 
+/** Case id: `chunked-codec`. */
+@:asserts
+class TestChunkedCodec extends TestChunked {
   @:variant(this.source, '3\r\n123\r\n0\r\n\r\n')
   @:variant(this.source.append(this.source).append(this.source), '3\r\n123\r\n3\r\n123\r\n3\r\n123\r\n0\r\n\r\n')
   @:variant('1234567890', 'A\r\n1234567890\r\n0\r\n\r\n')
@@ -48,9 +55,13 @@ class TestChunked {
     return asserts;
   }
   #end
+}
 
+/** Case id: `chunked-outgoing`. */
+@:asserts
+class TestChunkedOutgoing extends TestChunked {
   public function factoryDefault() {
-    var res = OutgoingResponse.chunked('text/plain', null, source);
+    final res = OutgoingResponse.chunked('text/plain', null, source);
     asserts.assert(res.header.statusCode == OK);
     asserts.assert(res.header.byName(TRANSFER_ENCODING).sure() == 'chunked');
     asserts.assert(!res.header.getContentLength().isSuccess());
@@ -61,15 +72,15 @@ class TestChunked {
   }
 
   public function factoryCustomStatus() {
-    var res = OutgoingResponse.chunked(Created, 'text/plain', null, source);
+    final res = OutgoingResponse.chunked(Created, 'text/plain', null, source);
     asserts.assert(res.header.statusCode == Created);
     asserts.assert(res.header.byName(TRANSFER_ENCODING).sure() == 'chunked');
     return asserts.done();
   }
 
   public function withChunkedEncodingPreservesBlob() {
-    var res = OutgoingResponse.blob('123', 'text/plain');
-    var out = res.withChunkedEncoding();
+    final res = OutgoingResponse.blob('123', 'text/plain');
+    final out = res.withChunkedEncoding();
     asserts.assert(!out.header.byName(TRANSFER_ENCODING).isSuccess());
     asserts.assert(out.header.getContentLength().sure() == 3);
     res.body.all()
@@ -79,11 +90,11 @@ class TestChunked {
   }
 
   public function withChunkedEncodingApplies() {
-    var res = new OutgoingResponse(
+    final res = new OutgoingResponse(
       new ResponseHeader(OK, OK, [new HeaderField('Content-Type', 'text/plain')]),
       source
     );
-    var out = res.withChunkedEncoding();
+    final out = res.withChunkedEncoding();
     asserts.assert(out.header.byName(TRANSFER_ENCODING).sure() == 'chunked');
     out.body.all()
       .next(body -> asserts.assert(body.toString() == '3\r\n123\r\n0\r\n\r\n'))
@@ -92,14 +103,14 @@ class TestChunked {
   }
 
   public function withChunkedEncodingAlreadyChunked() {
-    var res = new OutgoingResponse(
+    final res = new OutgoingResponse(
       new ResponseHeader(OK, OK, [
         new HeaderField('Content-Type', 'text/plain'),
         new HeaderField(TRANSFER_ENCODING, 'chunked'),
       ]),
       Chunked.encode(source)
     );
-    var out = res.withChunkedEncoding();
+    final out = res.withChunkedEncoding();
     asserts.assert(out.header.byName(TRANSFER_ENCODING).sure() == 'chunked');
     out.body.all()
       .next(body -> asserts.assert(body.toString() == '3\r\n123\r\n0\r\n\r\n'))
@@ -108,9 +119,9 @@ class TestChunked {
   }
 
   public function withChunkedEncodingNoBody() {
-    for(code in [204, 304, Continue]) {
-      var res = new OutgoingResponse(new ResponseHeader(code, code, []), Source.EMPTY);
-      var out = res.withChunkedEncoding();
+    for (code in [204, 304, Continue]) {
+      final res = new OutgoingResponse(new ResponseHeader(code, code, []), Source.EMPTY);
+      final out = res.withChunkedEncoding();
       asserts.assert(!out.header.byName(TRANSFER_ENCODING).isSuccess());
     }
     return asserts.done();
