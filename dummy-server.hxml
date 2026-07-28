@@ -1,0 +1,5 @@
+# DummyServer / container-under-test build. Pass -D port= and -D server= on the CLI.
+# Do not use the Travix runner hxml for this build.
+-cp tests
+-main DummyServer
+-lib tink_http_middleware

@@ -1,0 +1,6 @@
+# Stable Travix runner baseline (no default port — pass -D port= only for container lane).
+# Canonical invoke: lix run travix <target> -D suites=... -D clients=... -D endpoints=... -D cases=...
+-cp tests
+-lib tink_unittest
+-lib deep_equal
+-main RunTests

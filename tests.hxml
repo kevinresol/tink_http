@@ -1,5 +1,3 @@
--cp tests
--lib tink_unittest
--lib deep_equal
--D port=8000
--main RunTests
+# Travix entrypoint — includes the stable runner. Immutable: never rewrite this file
+# for DummyServer builds; use TRAVIX_HXML=dummy-server.hxml instead.
+tests.runner.hxml
