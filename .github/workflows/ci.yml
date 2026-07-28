@@ -16,13 +16,57 @@ jobs:
         haxe-version:
           - stable
           - nightly
-        # M7 temporary single cell — M8 expands full client + unit matrix
-        target:
-          - node
+        # One Travix target per cell; clients/cases tuned to what compiles on that target.
+        # Unit is a separate cell (node). Container lane cells land in M9.
+        cell:
+          - target: node
+            suites: client
+            clients: node,curl
+            cases: methods,query,headers,body,chunked-response,tls,errors
+          - target: js
+            suites: client
+            clients: js,js-fetch
+            cases: methods,query,headers,body,chunked-response,tls
+          - target: php
+            suites: client
+            clients: socket
+            cases: methods,query,headers,body
+          - target: neko
+            suites: client
+            clients: socket,curl
+            cases: methods,query,headers,body,chunked-response
+          - target: cpp
+            suites: client
+            clients: socket,curl
+            cases: methods,query,headers,body,chunked-response
+          - target: python
+            suites: client
+            clients: socket,curl
+            cases: methods,query,headers,body,chunked-response
+          - target: interp
+            suites: client
+            clients: socket,curl
+            cases: methods,query,headers,body,chunked-response
+          - target: jvm
+            suites: client
+            clients: socket,curl
+            cases: methods,query,headers,body,chunked-response
+          - target: node
+            suites: unit
+            clients: ''
+            cases: all
 
     steps:
       - name: Check out repo
         uses: actions/checkout@v6
+
+      # Needed for the jvm matrix target (and keytool CA import below); not always present on ubuntu-latest
+      - name: Install JDK
+        if: matrix.cell.target == 'jvm'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
       - name: Cache Haxe
         uses: actions/cache@v6
@@ -75,7 +119,7 @@ jobs:
           echo "HTTPBIN_URL=http://${HTTPBIN_HOST}:${HTTP_PORT}" >> "$GITHUB_ENV"
           echo "HTTPBIN_SECURE_URL=https://${HTTPBIN_HOST}:${HTTPS_PORT}" >> "$GITHUB_ENV"
 
-          # JVM trust store (does not use OS CAs) — used again when M8 adds jvm cells
+          # JVM trust store (does not use OS CAs)
           if command -v keytool >/dev/null 2>&1; then
             KEYTOOL="$(command -v keytool)"
             if JAVA_BIN="$(readlink -f "$KEYTOOL" 2>/dev/null)"; then
@@ -127,15 +171,20 @@ jobs:
           exit 1
 
       - name: Run Test
-        run: >
-          lix run travix ${{ matrix.target }}
-          -D suites=client,unit
-          -D clients=node
-          -D endpoints=httpbin,httpbin-secure
-          -D cases=all
-          -D httpbin_url=${{ env.HTTPBIN_URL }}
-          -D httpbin_secure_url=${{ env.HTTPBIN_SECURE_URL }}
-          -D httpbin_ca=${{ env.HTTPBIN_CA }}
+        run: |
+          set -euo pipefail
+          ARGS=(
+            -D "suites=${{ matrix.cell.suites }}"
+            -D "cases=${{ matrix.cell.cases }}"
+            -D "httpbin_url=${{ env.HTTPBIN_URL }}"
+            -D "httpbin_secure_url=${{ env.HTTPBIN_SECURE_URL }}"
+            -D "httpbin_ca=${{ env.HTTPBIN_CA }}"
+          )
+          if [ "${{ matrix.cell.suites }}" != "unit" ]; then
+            ARGS+=(-D "clients=${{ matrix.cell.clients }}")
+            ARGS+=(-D "endpoints=httpbin,httpbin-secure")
+          fi
+          lix run travix ${{ matrix.cell.target }} "${ARGS[@]}"
 
   release:
     runs-on: ubuntu-latest
