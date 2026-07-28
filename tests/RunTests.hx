@@ -1,43 +1,30 @@
 package;
 
-import tink.testrunner.*;
-import tink.unit.*;
-import tink.http.clients.*;
+import tink.testrunner.Runner;
 
 class RunTests {
   static function main() {
     HttpbinConfig.bootstrapSslCa();
 
-    var port = switch Env.getDefine('port') {
-      case null: null;
-      case v: Std.parseInt(v);
+    switch MatrixCli.parse() {
+      case Failure(e):
+        fail(e.message);
+      case Success(config):
+        switch SuiteAsm.build(config) {
+          case Failure(e):
+            fail(e.message);
+          case Success(tests):
+            Runner.run(tests).handle(Runner.exit);
+        }
     }
-    
-    var tests = TestBatch.make([
-    #if !container_only
-    new TestHeader(),
-      new Sses(),
-      new TestChunked(),
-      new TestResponseFraming(),
-      new FetchTest(#if php Php #end),
-    #end
-    ]);
-    
-    #if !no_client
-    for(client in Context.clients) {
-      #if !container_only
-        tests.push(TestSuite.make(new TestHttp(client, Httpbin(false)), '$client -> ${HttpbinConfig.url}'));
-        #if (cs || lua) if(client != Socket) #end // no support for ssl socket yet
-        tests.push(TestSuite.make(new TestHttp(client, Httpbin(true)), '$client -> ${HttpbinConfig.secureUrl}'));
-      #end
-      
-      if(port != null) tests = tests.concat([
-        TestSuite.make(new TestHttp(client, Local(port)), '$client -> http://localhost:$port'),
-      ]);
+  }
+
+  static function fail(message:String):Void {
+    Sys.println(message);
+    if (message.indexOf('Test matrix flags') == -1) {
+      Sys.println('');
+      Sys.println(MatrixCli.help());
     }
-    #end
-    
-    Runner.run(tests).handle(Runner.exit);
-    
+    Sys.exit(1);
   }
 }
