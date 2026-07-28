@@ -1,9 +1,15 @@
 package;
 
+import MatrixCli.MatrixCases;
 import MatrixCli.MatrixClient;
 import MatrixCli.MatrixConfig;
 import MatrixCli.MatrixEndpoint;
 import MatrixCli.MatrixSuite;
+import TestHttp.Target;
+import TestHttp.TestHttpChunked;
+import TestHttp.TestHttpHeaders;
+import TestHttp.TestHttpMethods;
+import TestHttp.TestHttpOrigin;
 import tink.core.Error;
 import tink.core.Outcome;
 import tink.testrunner.Batch;
@@ -12,7 +18,8 @@ import tink.unit.TestSuite;
 
 /**
   Assembles tink_unittest suites from a parsed `MatrixConfig`.
-  Until M4/M5, network case groups are attached wholesale (no method gating).
+  TestHttp is gated by `-D cases=` via case-specific classes (suite assembly).
+  FetchTest remains wholesale until M5.
 **/
 class SuiteAsm {
   public static function build(config:MatrixConfig):Outcome<Batch, Error> {
@@ -29,9 +36,9 @@ class SuiteAsm {
         case Failure(e): return Failure(e);
         case Success(clients):
           if (wantsClient)
-            appendClientLane(suites, clients, config.endpoints);
+            appendClientLane(suites, clients, config.endpoints, config.cases);
           if (wantsContainer)
-            appendContainerLane(suites, clients, config.endpoints, config.port);
+            appendContainerLane(suites, clients, config.endpoints, config.port, config.cases);
       }
     }
 
@@ -48,21 +55,16 @@ class SuiteAsm {
   static function appendClientLane(
     suites:Array<Suite>,
     clients:Array<ClientType>,
-    endpoints:Array<MatrixEndpoint>
+    endpoints:Array<MatrixEndpoint>,
+    cases:MatrixCases
   ):Void {
     for (client in clients) {
       for (ep in endpoints) switch ep {
         case Httpbin:
-          suites.push(TestSuite.make(
-            new TestHttp(client, Httpbin(false)),
-            '$client -> ${HttpbinConfig.url}'
-          ));
+          appendTestHttp(suites, client, Httpbin(false), 'httpbin', cases);
         case HttpbinSecure:
           if (!skipSecureSocket(client))
-            suites.push(TestSuite.make(
-              new TestHttp(client, Httpbin(true)),
-              '$client -> ${HttpbinConfig.secureUrl}'
-            ));
+            appendTestHttp(suites, client, Httpbin(true), 'httpbin-secure', cases);
         case Local:
           // Client lane never adds Local/DummyServer endpoints.
       }
@@ -75,16 +77,43 @@ class SuiteAsm {
     suites:Array<Suite>,
     clients:Array<ClientType>,
     endpoints:Array<MatrixEndpoint>,
-    port:Null<Int>
+    port:Null<Int>,
+    cases:MatrixCases
   ):Void {
     if (endpoints.indexOf(Local) == -1 || port == null)
       return;
-    for (client in clients) {
-      suites.push(TestSuite.make(
-        new TestHttp(client, Local(port)),
-        '$client -> http://localhost:$port'
-      ));
-    }
+    for (client in clients)
+      appendTestHttp(suites, client, Local(port), 'local', cases);
+  }
+
+  /** Register only TestHttp case classes matching `-D cases=` (D1 ids). */
+  static function appendTestHttp(
+    suites:Array<Suite>,
+    client:ClientType,
+    target:Target,
+    endpoint:String,
+    cases:MatrixCases
+  ):Void {
+    final name = '$client -> $endpoint';
+    if (wantsAny(cases, ['methods', 'query', 'body']))
+      suites.push(TestSuite.make(new TestHttpMethods(client, target), name));
+    if (wantsAny(cases, ['headers', 'headers-multi']))
+      suites.push(TestSuite.make(new TestHttpHeaders(client, target), name));
+    if (wantsCase(cases, 'origin'))
+      suites.push(TestSuite.make(new TestHttpOrigin(client, target), name));
+    if (wantsCase(cases, 'chunked-response'))
+      suites.push(TestSuite.make(new TestHttpChunked(client, target), name));
+  }
+
+  static function wantsCase(cases:MatrixCases, id:String):Bool
+    return switch cases {
+      case All: true;
+      case Selected(ids): ids.indexOf(id) != -1;
+    };
+
+  static function wantsAny(cases:MatrixCases, ids:Array<String>):Bool {
+    for (id in ids) if (wantsCase(cases, id)) return true;
+    return false;
   }
 
   static function resolveClients(requested:Array<MatrixClient>):Outcome<Array<ClientType>, Error> {
