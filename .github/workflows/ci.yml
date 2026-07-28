@@ -17,7 +17,8 @@ jobs:
           - stable
           - nightly
         # One Travix target per cell; clients/cases tuned to what compiles on that target.
-        # Unit is a separate cell (node). Container lane cells land in M9.
+        # Unit is a separate cell (node). Container lane: one cell per container name
+        # (probe Travix target is always node — not a client×container product).
         cell:
           - target: node
             suites: client
@@ -55,6 +56,12 @@ jobs:
             suites: unit
             clients: ''
             cases: all
+          # Container lane: SUT = started container; probe always travix node + clients=node.
+          - target: node
+            suites: container
+            container: node
+            clients: node
+            cases: methods,headers,body
 
     steps:
       - name: Check out repo
@@ -84,6 +91,7 @@ jobs:
         run: lix download
 
       - name: Start local httpbin (HTTP + HTTPS)
+        if: matrix.cell.suites != 'container'
         run: |
           set -euo pipefail
 
@@ -170,21 +178,52 @@ jobs:
           docker logs tink-httpbin-https || true
           exit 1
 
+      # Container lane: SUT via run-container.sh; wait is inside the script (/active).
+      - name: Start container under test
+        if: matrix.cell.suites == 'container'
+        run: |
+          set -euo pipefail
+          PORT=18080
+          echo "PORT=$PORT" >> "$GITHUB_ENV"
+          scripts/run-container.sh "${{ matrix.cell.container }}" "$PORT"
+
       - name: Run Test
         run: |
           set -euo pipefail
-          ARGS=(
-            -D "suites=${{ matrix.cell.suites }}"
-            -D "cases=${{ matrix.cell.cases }}"
-            -D "httpbin_url=${{ env.HTTPBIN_URL }}"
-            -D "httpbin_secure_url=${{ env.HTTPBIN_SECURE_URL }}"
-            -D "httpbin_ca=${{ env.HTTPBIN_CA }}"
-          )
-          if [ "${{ matrix.cell.suites }}" != "unit" ]; then
-            ARGS+=(-D "clients=${{ matrix.cell.clients }}")
-            ARGS+=(-D "endpoints=httpbin,httpbin-secure")
+          if [ "${{ matrix.cell.suites }}" = "container" ]; then
+            # Probe is always node (NodeClient); do not pass httpbin_* / httpbin endpoints.
+            lix run travix node \
+              -D suites=container \
+              -D clients=node \
+              -D endpoints=local \
+              -D "port=${PORT}" \
+              -D "cases=${{ matrix.cell.cases }}"
+          else
+            ARGS=(
+              -D "suites=${{ matrix.cell.suites }}"
+              -D "cases=${{ matrix.cell.cases }}"
+              -D "httpbin_url=${{ env.HTTPBIN_URL }}"
+              -D "httpbin_secure_url=${{ env.HTTPBIN_SECURE_URL }}"
+              -D "httpbin_ca=${{ env.HTTPBIN_CA }}"
+            )
+            if [ "${{ matrix.cell.suites }}" != "unit" ]; then
+              ARGS+=(-D "clients=${{ matrix.cell.clients }}")
+              ARGS+=(-D "endpoints=httpbin,httpbin-secure")
+            fi
+            lix run travix ${{ matrix.cell.target }} "${ARGS[@]}"
           fi
-          lix run travix ${{ matrix.cell.target }} "${ARGS[@]}"
+
+      - name: Stop container under test
+        if: always() && matrix.cell.suites == 'container'
+        run: |
+          set -uo pipefail
+          PORT="${PORT:-18080}"
+          curl -sf --max-time 2 "http://127.0.0.1:${PORT}/close" >/dev/null 2>&1 || true
+          PID_FILE="/tmp/tink_http_container_${PORT}.pid"
+          if [ -f "$PID_FILE" ]; then
+            kill "$(cat "$PID_FILE")" 2>/dev/null || true
+            rm -f "$PID_FILE"
+          fi
 
   release:
     runs-on: ubuntu-latest

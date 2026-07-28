@@ -23,6 +23,10 @@
 #   curl -sf "http://127.0.0.1:${PORT}/close"   # graceful DummyServer exit
 #   kill "$(cat /tmp/tink_http_container_${PORT}.pid)"   # or kill $CONTAINER_PID
 #
+# CI (M9): `.github/workflows/ci.yml` container cell runs this script, then
+# `lix run travix node` with suites=container / clients=node / endpoints=local,
+# and always tears down via /close + pid file (see Stop container under test).
+#
 # --foreground: after /active, wait on the server; INT/TERM/EXIT send /close then kill.
 
 set -euo pipefail
